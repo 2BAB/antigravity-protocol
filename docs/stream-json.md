@@ -1,12 +1,14 @@
-# CLI 的 stream-json
+# Stream-json transport
 
-## 背景
+## Overview
 
-`agy` 默认是给人用的交互式终端。加上 `--input-format stream-json` 之后，它变成一台可以被程序驱动的机器：stdin 收 JSON，stdout 吐 JSON，一行一个。
+`agy` runs interactively by default. Adding `--input-format stream-json` makes it
+scriptable: newline-delimited JSON on stdin, the same on stdout.
 
-这不是什么正式协议，只是 NDJSON（JSON Lines）的约定。Claude Code 早就在用同样的开关名，`agy` 沿用了这套命名，但事件结构是它自己的。
+This is a convention rather than a formal specification. Claude Code uses the
+same flag names; the event shapes described here are specific to `agy`.
 
-## 怎么起
+## Starting a process
 
 ```bash
 agy --input-format stream-json \
@@ -15,50 +17,69 @@ agy --input-format stream-json \
     [--model <model>] [--conversation <id>]
 ```
 
-注意两件事：不要传 `-p`，也不要把 prompt 放进 argv。进程起来后挂在 stdin 上等输入。stdout 是协议，stderr 是日志，别混。
+Two constraints. Do not pass `-p`, and do not put the prompt in argv: the
+process reads stdin and stays alive between turns. Treat stdout as protocol data
+and stderr as logs.
 
-## 一轮怎么走
+## Turn structure
 
-往 stdin 写一行：
+Write one line to stdin:
 
 ```json
-{"event":"user","message":{"content":"你的任务"}}
+{"event":"user","message":{"content":"your task"}}
 ```
 
-stdout 会依次出现三种事件：
+Three event types follow on stdout.
 
-`init` 在开头，给出 `conversation_id`、`model` 和工具清单。
+`init` arrives first and carries `conversation_id`, `model`, and the tool list.
 
-`step_update` 是过程。关心的字段有 `step_index`、`state`（ACTIVE / DONE）、`step_type`、`tool_name`、`text_delta`、`duration_seconds`、`usage`。`step_type` 常见取值是 `user_input`、`system_message`、`agent_response`、`tool`。
+`step_update` describes progress. Relevant fields are `step_index`, `state`
+(`ACTIVE` or `DONE`), `step_type`, `tool_name`, `text_delta`,
+`duration_seconds`, and `usage`. Common `step_type` values are `user_input`,
+`system_message`, `agent_response`, and `tool`.
 
-`result` 收尾，给出 `status`、`response`、`error`、`duration_seconds`、`num_turns`、`usage`。
+`result` closes the turn with `status`, `response`, `error`,
+`duration_seconds`, `num_turns`, and `usage`.
 
-写完一行必须等 `result` 回来，才能写下一条。没有 cancel-turn，也没有中途插话的接口。
+One turn may be in flight at a time. The next user event must wait for the
+`result`. There is no cancel or mid-turn input.
 
-## 续接：两种方式，差别不小
+## Resuming a conversation
 
-`--continue` 续的是「该工作目录下最近的一个会话」。听起来方便，但如果你有两个任务共用一个 cwd，它们会互相串。
+`--continue` resumes the most recent conversation in the current working
+directory. It is convenient, but two tasks that share a directory will resume
+each other's context.
 
-`--conversation <id>` 指定确切会话 id，id 从 `init` 或 `result` 里拿。要做多会话就存 id，用这个。
+`--conversation <id>` resumes a specific conversation. The id comes from `init`
+or `result`. Applications that keep several sessions should store the id and use
+this form.
 
-## usage 的坑
+## Token accounting
 
-`result.usage` 是**整个会话的累计值**，不是这一轮。直接拿来记账，第二转会重复计费。
+`result.usage` is cumulative for the session, not for the turn. Using it as a
+per-turn value re-bills earlier turns.
 
-正确做法是累加本轮所有 `step_type=agent_response && state=DONE` 的 `step_update.usage`。实在没有 per-step 数据，才退回 `result.usage` 的差分。
+The accurate approach is to sum `usage` from every `step_update` with
+`step_type=agent_response` and `state=DONE`. The `result.usage` delta is a
+fallback when no per-step records were emitted.
 
-另一个坑是 `input_tokens` 有时已经扣掉了 cache read（`cache_read_tokens > input_tokens`，且 `total = input + output`）。这时候再做减法会把输入算成 0。判断条件写清楚：只有 `input >= cache` 时才减。
+A second detail: `input_tokens` is sometimes already net of cache reads
+(`cache_read_tokens > input_tokens`, and `total = input + output`). Subtracting
+cache in that case clamps input to zero. Subtract only when
+`input_tokens >= cache_read_tokens`.
 
-## 几件会让人困惑的小事
+## Operational notes
 
-`--mode auto` 对某些账号不可用，会静默退回默认模式，日志里有一行 warning，不影响功能。
+`--mode auto` is not available for every account. The CLI logs a warning and
+continues in its default mode; functionality is unaffected.
 
-冷启动大概 2–5 秒。进程常驻之后，后续回合不付这个成本。
+Cold start takes roughly two to five seconds. A persistent process avoids paying
+it on later turns.
 
-没有 idle 超时，进程会一直挂着。自己记得回收。
+There is no idle timeout. Processes stay alive until the host reaps them.
 
-## 带走这三条
+## Summary
 
-1. 一行一个 JSON，一问一答，`result` 之前不能写下一行。
-2. 要用 `--conversation <id>` 做续接，别依赖 `--continue`。
-3. usage 是累计的，按 per-step 求和才准。
+1. One JSON object per line, strictly one turn at a time.
+2. Resume with `--conversation <id>` rather than `--continue`.
+3. Derive per-turn usage from step records, not from the cumulative result.

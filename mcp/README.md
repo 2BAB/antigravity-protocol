@@ -1,46 +1,59 @@
 # agy-mcp
 
-把本机的 Antigravity CLI（`agy`）包成一个 MCP server，任何支持 MCP 的宿主都能把它当工具调用。
+An MCP server that exposes the local Antigravity CLI (`agy`) as three tools, so
+any MCP-capable host can call it.
 
-## 为什么有这个东西
+## Why this exists
 
-`agy` 本身好用，但要接进别的 agent 平台，你得写适配器：起进程、写 stdin、解析事件、管会话、算 usage。这些我写了一遍，抽成 MCP 工具，省得每个宿主重写。
+`agy` is straightforward to use directly, but integrating it into another agent
+platform means writing an adapter: spawn a process, write stdin, parse events,
+manage sessions, account for usage. This server packages that work once instead
+of once per host.
 
-## 三个工具
+## Tools
 
-`agy_turn` 跑一个回合，返回 agy 的最终文本。传 `conversationId` 续接会话，不传就是新会话。
+`agy_turn` runs one turn and returns the final text. Pass `conversationId` to
+continue an existing conversation; omit it to start a new one.
 
-`agy_sessions` 列出已知会话和状态。`agy_close` 关掉某个会话的进程，会话还能再续。
+`agy_sessions` lists known conversations and their state. `agy_close` stops the
+process behind a conversation, which can still be resumed later.
 
-默认常驻：一个会话一个进程，跨回合复用。启动一次两三秒，之后不重复付。想每轮起独立进程就加 `stateless: true`，代价是每次冷启动。
+Sessions are persistent by default: one process per conversation, reused across
+turns. A cold start takes roughly two to three seconds and is paid once.
+`stateless: true` starts an independent process per call instead; the tradeoff is
+a cold start on every call.
 
-## 环境变量
+## Environment variables
 
-- `AGY_MCP_BIN`，`agy` 路径，默认走 PATH
-- `AGY_MCP_MODEL`，默认模型
-- `AGY_MCP_HTTP_PORT`，设了就开 HTTP 模式
-- `AGY_MCP_HTTP_HOST`，默认 `127.0.0.1`
-- `AGY_MCP_TOKEN`，设了就要求 bearer token
-- `AGY_MCP_HOME`，会话记录目录，默认 `~/.agy-mcp`
-- `AGY_MCP_IDLE_MS`，空闲回收，默认五分钟
-- `AGY_MCP_MAX_SESSIONS`，常驻进程上限，默认 4
+- `AGY_MCP_BIN` — path to `agy`; defaults to PATH lookup
+- `AGY_MCP_MODEL` — default model
+- `AGY_MCP_HTTP_PORT` — enables HTTP mode
+- `AGY_MCP_HTTP_HOST` — defaults to `127.0.0.1`
+- `AGY_MCP_TOKEN` — when set, requests must carry a bearer token
+- `AGY_MCP_HOME` — session records directory, defaults to `~/.agy-mcp`
+- `AGY_MCP_IDLE_MS` — idle reaping interval, defaults to five minutes
+- `AGY_MCP_MAX_SESSIONS` — concurrent process limit, defaults to four
 
-## 冒烟测试
+## Smoke test
 
 ```bash
 node scripts/smoke.mjs
 ```
 
-会真的跑一次 agy，回一个 PONG。`scripts/smoke-modes.mjs` 对比常驻和一次性两种模式。
+Runs a real `agy` turn and prints the reply. `scripts/smoke-modes.mjs` compares
+persistent and stateless modes.
 
-## 三个踩过的坑
+## Implementation notes
 
-返回体必须带 `jsonrpc: "2.0"` 信封。漏了客户端 schema 校验不过，很多宿主只报一句「连不上」，很难查。
+Responses must carry the `jsonrpc: "2.0"` envelope. Without it, MCP clients fail
+schema validation and typically report only a generic connection error.
 
-usage 是累计值，不是单轮。所以这里按 per-step 求和，不直接读 `result.usage`。
+Usage counters are cumulative, so token totals here are summed from per-step
+records rather than read from `result.usage`.
 
-单次调用延迟方差很大，五秒到二十秒都见过。这是 agy 后端的排队，不是这个 server 的问题。
+Latency per call varies widely in practice, from about five to twenty seconds.
+That spread originates in the backend, not in this server.
 
-## 许可
+## License
 
-MIT。
+MIT.

@@ -15,8 +15,8 @@ const call = async (label, args) => {
   console.log(`${label.padEnd(22)} wall=${Date.now()-t}ms  in=${j.usage?.input_tokens} cache=${j.usage?.cache_read_input_tokens} out=${j.usage?.output_tokens} tools=${j.toolUses} reused=${j.reusedProcess}`)
   return j.conversationId
 }
-const cid = await call('1 新建会话(冷启)', { prompt:'Reply with ONLY the word PONG' })
-await call('2 同会话(warm)',    { prompt:'Reply with ONLY the word PONG', conversationId: cid })
-await call('3 同会话+工具调用',  { prompt:'Run this exact shell command with run_command: echo hi — then reply ONLY DONE.', conversationId: cid })
-await call('4 同会话(再warm)',  { prompt:'Reply with ONLY the word PONG', conversationId: cid })
+const cid = await call('1 new session (cold)', { prompt:'Reply with ONLY the word PONG' })
+await call('2 same session (warm)',    { prompt:'Reply with ONLY the word PONG', conversationId: cid })
+await call('3 same session + tool call',  { prompt:'Run this exact shell command with run_command: echo hi — then reply ONLY DONE.', conversationId: cid })
+await call('4 same session (warm again)',  { prompt:'Reply with ONLY the word PONG', conversationId: cid })
 srv.kill('SIGKILL')

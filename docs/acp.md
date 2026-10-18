@@ -1,58 +1,75 @@
 # ACP server
 
-## 背景
+## Overview
 
-ACP 是 Zed 提出的 Agent Client Protocol，用来让编辑器驱动 coding agent。`agy` 有一个官方的 ACP server，和 Antigravity 一起分发——不是 npm 包，是一个独立可执行文件，从官方渠道下载。
+ACP (Agent Client Protocol) is a protocol proposed by Zed for editors to drive
+coding agents. Antigravity ships an official ACP server alongside the CLI. It is
+a separate executable distributed through the official channel rather than an
+npm package, and runs over JSON-RPC on stdio.
 
-它的定位相当于 `agy` 的 app-server：有会话、有流式更新、能取消、能请求权限。
+It is the closest equivalent to an app-server: sessions, streaming updates,
+cancellation, and permission requests.
 
-## 怎么起
+## Launch and handshake
 
-下载官方分发包，解压后目录里通常有两个文件：ACP server 自身，以及一个 helper。两者要放在一起。直接运行 server 即可，它用 stdio 跑 JSON-RPC。
+Download the official package, extract it, and run the server. The bundle
+contains the server and a helper binary that must stay beside it.
 
-握手顺序：
+The handshake has three steps:
 
-1. `initialize`，带 `protocolVersion: 1` 和客户端能力
-2. `authenticate`，`methodId` 选一种认证方式
-3. `session/new`，带 `cwd`，需要的话带 `mcpServers`
-4. 之后每轮 `session/prompt`
+1. `initialize` with `protocolVersion: 1` and client capabilities.
+2. `authenticate` with one of the advertised auth method ids.
+3. `session/new` with `cwd`, and `mcpServers` if the session needs tools.
 
-`session/prompt` 的返回值里有 `stopReason`，正常结束是 `end_turn`。
+Each turn is then one `session/prompt`. The response carries a `stopReason`;
+`end_turn` indicates a normal completion.
 
-## 认证有四种
+## Authentication
 
-`initialize` 会把这些列出来：个人 Google 账号、企业账号、Gemini API key、Enterprise Agent Platform。
+`initialize` advertises four methods: a personal Google account, a Google
+business account, a Gemini API key, and the Gemini Enterprise Agent Platform.
+The first two use OAuth. The API key options do not depend on an Antigravity
+account.
 
-如果只是自己玩，OAuth 最省事。但要注意下面那条风险。
+## Differences from the CLI
 
-## 和 CLI 比，好在哪
+The prompt body is delivered inside `session/prompt`. The agent does not need to
+fetch it from anywhere else, so a turn is one model generation rather than a
+fetch followed by a reply.
 
-正文是随 `session/prompt` 直接送进去的，不需要 agent 再去别处取一次。所以一轮只有一次模型生成，而不是「先查再回」两次。
+The ACP server also does not run the CLI's command review described in
+[costs and monitoring](costs-and-monitoring.md), which removes one to two
+seconds per tool call.
 
-另外它不经过 CLI 那层命令安全审查，每次工具调用省下 1–2 秒。它还支持 `session/cancel`，能真正打断一个回合。
+`session/cancel` cancels a running turn. `session/load` restores a conversation
+from its on-disk record, including the tool calls in its history.
 
-`session/load` 可以从磁盘上已有的会话恢复，包括历史里的工具调用。
+## The local credential proxy
 
-## 一个容易被误会的组件
+At startup the server binds a small proxy on a random `127.0.0.1` port and logs
+it as a credentials injection proxy. The proxy attaches credentials to outbound
+requests so the agent process itself never holds a token.
 
-server 启动时会起一个本地小代理，日志里写着 credentials injection proxy，监听 `127.0.0.1` 的随机端口。它的作用是把凭证注入到出站请求，让 agent 子进程本身拿不到 token。
+It is loopback-only and does not add measurable latency. Time spent per turn is
+in the backend, not in this proxy.
 
-它只在本机回环，不构成延迟来源。真正的延迟在 Google 的后端。
+## Latency
 
-## 延迟
+Observed on one machine with the same prompt: a one-shot CLI call took about ten
+seconds, the desktop application eight to thirteen, and a single ACP
+`session/prompt` five to twenty. Run-to-run variance is larger than the
+difference between transports.
 
-实测同一句「讲个笑话」：CLI 一次性调用 10 秒出头，桌面版 8–13 秒，ACP 一次 prompt 五秒到二十秒不等。
+## Authentication and terms
 
-波动最大的不是协议，是后端。
+Antigravity's terms describe access to the service through third-party software
+or tools as outside the agreement. Using OAuth from a non-Google host falls under
+that description. The API key methods advertised during `initialize` avoid the
+question and are the recommended choice for third-party integrations.
 
-## 关于服务条款
+## Summary
 
-Antigravity 的服务条款明确禁止「使用第三方软件、工具或服务访问该服务」，并点名通过 OAuth 的第三方接入。用编辑器或别的 agent 平台驱动 `agy`，属于这个模式。
-
-想避开这个风险，用 `authenticate` 里的 API key 方式，不要用 OAuth。Google 官方也是这么建议的。
-
-## 带走这三条
-
-1. ACP 是 `agy` 最接近 app-server 的接口：会话、流式、取消、权限，都有。
-2. 正文随 prompt 直送，一轮一次生成。
-3. 认证优先用 API key，别用 OAuth 走第三方。
+1. ACP is the app-server-shaped interface: sessions, streaming, cancel,
+   permission requests.
+2. The prompt is delivered with the request, so a turn is one generation.
+3. For third-party hosts, prefer API key authentication.

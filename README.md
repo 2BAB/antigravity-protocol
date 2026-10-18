@@ -1,41 +1,55 @@
-# Antigravity (agy) 协议笔记
+# Antigravity (agy) protocol notes
 
-我把 `agy` 从命令行到 ACP 摸了两天，顺手写了个 MCP server。这个仓库装两样东西：一份关于它怎么跑的笔记，和一个能直接用的工具。
+This repository collects two things: notes on how the Antigravity CLI (`agy`)
+behaves when driven by another program, and a small MCP server that exposes it
+as three tools.
 
-两样都来自同一个目的——让 agy 在我自己的工作流里跑得稳一点。笔记记的是实测到的行为，工具把踩过的坑固化了。
+Both come from the same exercise: running `agy` as a worker inside an agent
+host. The notes record observable behavior. The server packages the parts that
+are easy to get wrong.
 
-## 里面有什么
+## Contents
 
-`docs/` 四篇：
+`docs/`
 
-- [stream-json](docs/stream-json.md) — 管道协议、事件格式、两种续接、usage 的坑
-- [acp](docs/acp.md) — 官方 ACP server 的握手、认证、和 CLI 的差别
-- [成本与审查](docs/costs-and-monitoring.md) — 为什么有的命令会多花一秒多
-- [怎么量一次回合](docs/methodology.md) — 笨办法，但能重复
+- [stream-json](docs/stream-json.md) — the line-delimited JSON transport, event
+  shapes, resuming a conversation, token accounting
+- [acp](docs/acp.md) — the ACP server: handshake, authentication, and how it
+  differs from the CLI
+- [costs and monitoring](docs/costs-and-monitoring.md) — why some tool calls
+  take an extra second or two
+- [methodology](docs/methodology.md) — a small, repeatable way to measure a turn
 
-`mcp/` 一个 MCP server，把 agy 包成三个工具。零依赖，Node 24 直接跑 TypeScript，不用构建。
+`mcp/`
 
-## 只想搞懂它怎么跑
+An MCP server that wraps `agy` as three tools. No dependencies; Node 24 runs the
+TypeScript sources directly, with no build step.
 
-从 [docs/stream-json.md](docs/stream-json.md) 开始。看完大概能明白为什么「接进去很简单，但很慢」。
+## Where to start
 
-## 想直接用
+For the transport, start with [docs/stream-json.md](docs/stream-json.md). It
+explains why an integration can be simple to build and still feel slow.
+
+For the server, see [mcp/README.md](mcp/README.md).
+
+## Quick start
 
 ```bash
 cd mcp
 node src/index.ts
 ```
 
-stdio 模式，宿主会自己拉起。要 HTTP：
+stdio mode; the host spawns the process. For HTTP:
 
 ```bash
 AGY_MCP_HTTP_PORT=8787 node src/index.ts
 curl http://127.0.0.1:8787/healthz
 ```
 
-默认只监听 `127.0.0.1`。这个进程能执行本机命令，别改成 `0.0.0.0`。
+The server binds to `127.0.0.1` by default. It can execute commands on the
+machine it runs on, so it should not be exposed on a public interface.
 
-接到宿主里的配置：
+Registering it with a host:
 
 ```json
 {
@@ -49,12 +63,35 @@ curl http://127.0.0.1:8787/healthz
 }
 ```
 
-工具、环境变量、已知的坑，都在 [mcp/README.md](mcp/README.md)。
+## What the server exposes
 
-## 一个必须说的风险
+`agy_turn` runs one turn and returns the final text. `agy_sessions` lists known
+conversations. `agy_close` stops the process behind one of them.
 
-用第三方宿主通过 Antigravity 的 OAuth 登录去驱动 `agy`，可能违反它的服务条款。ACP 支持用 API key 认证，走那条路更稳妥。细节在 [docs/acp.md](docs/acp.md) 的最后一节。
+Sessions are persistent by default: one process per conversation, reused across
+turns. `stateless: true` starts a fresh process for a single call instead.
 
-## 许可
+## Notes for integrators
 
-代码 MIT，文档 CC BY 4.0。分别见 [LICENSE](LICENSE) 和 [LICENSE-docs](LICENSE-docs)。
+Three details that took time to get right:
+
+- Responses need the `jsonrpc: "2.0"` envelope. Without it, MCP clients reject
+  the payload during schema validation and usually surface only a generic
+  connection error.
+- Usage counters reported by `agy` are cumulative for the session. Per-turn
+  accounting has to be derived from per-step records.
+- Per-call latency varies widely, from about five to twenty seconds in observed
+  runs, independent of the integration layer.
+
+## Authentication and terms
+
+`agy` and its ACP server support both Google account sign-in and API key
+authentication. Antigravity's terms describe access to the service through
+third-party tools as outside the agreement. If that matters for your setup, API
+key authentication avoids the question entirely; see
+[docs/acp.md](docs/acp.md#authentication).
+
+## License
+
+Code is MIT ([LICENSE](LICENSE)). Documentation is CC BY 4.0
+([LICENSE-docs](LICENSE-docs)).

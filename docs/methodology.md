@@ -1,48 +1,59 @@
-# 怎么量一次回合
+# Measuring a turn
 
-## 为什么要写这个
+## Overview
 
-我一开始量错了，结论也就跟着错。这里记的是笨办法，但能重复。
+Agent latency is easy to measure incorrectly. These are the steps that produced
+numbers consistent with what a user sees.
 
-## 先分清三个数
+## Three numbers
 
-墙钟时间：从你发消息到收到回复。用户感知的就是这个。
+Wall clock time from request to reply. This is what a user experiences.
 
-单跳时间：一次模型往返。一个回合可能有多次。
+Per-hop time for a single model round trip. A turn may contain several.
 
-token 数：输入、输出、缓存读，三个分开看。
+Token counts, with input, output, and cache reads recorded separately.
 
-## 最大的坑：累计值
+## Cumulative counters
 
-有些服务端上报的 usage 是**整个会话的累计值**，不是这一轮的。
+Some reported usage values are cumulative for the session rather than the turn.
 
-怎么识别：如果缓存读取数比 prompt 数还大，那一定是累计的——单轮不可能缓存超过输入。
+The signal is arithmetic: if the cache read count is larger than the prompt
+token count, the value cannot describe a single request.
 
-我第一次没注意这点，得出「每轮 prompt 十一万 token」的结论，实际单轮只有两万左右。
+A reliable approach is to read the counter before and after each turn and
+subtract.
 
-稳妥做法是自己在每轮前后各取一次快照，做差。
+## A workable procedure
 
-## 一个能用的量法
+Fix the prompt and the model. Run the same call at least three times; a single
+sample is not enough, because observed spread reaches four times within one
+configuration.
 
-固定 prompt、固定模型，重复三次以上。只跑一次的数没有意义，方差能到四倍。
+For each run record wall clock, number of model generations in the turn, and
+input, cache, and output tokens per generation.
 
-记录这几项：墙钟、这一轮有几次模型生成、每次生成的输入和缓存、输出 token。
+Generation counts can be read from logs. For the CLI transport, count
+`agent_response` steps. For ACP, count usage update notifications.
 
-生成次数可以从日志里数。CLI 看 `agent_response` 的 step 数，ACP 数 `usageUpdate` 或类似的事件。
+## Control experiments
 
-## 对照组很关键
+Running the same task on a second engine shows which side of the integration
+owns the cost.
 
-同样的任务，换一个 agent 引擎跑一遍，会立刻看清问题在哪。
+In one comparison, a second engine completed a turn in nineteen seconds with
+seven model generations, while `agy` took forty-four seconds with three. Per-hop
+cost differed by three to five times; hop count did not explain it.
 
-我做过一次对照：另一个引擎一轮里做了七次生成，十九秒跑完；`agy` 三次生成用了四十四秒。结论很直接——不是跳数问题，是每跳的成本差了三到五倍。
+Without a control, it is easy to attribute backend behavior to the integration
+layer.
 
-如果只测自己这边，很容易误判成「我的封装有问题」。
+## Tool calls
 
-## 别忽略工具调用
+Each tool call adds a model generation and, on the CLI transport, possibly a
+review (see [costs and monitoring](costs-and-monitoring.md)). Record the call
+count alongside timings so review time is not attributed to the model.
 
-一次工具调用会带来两个后果：多一次模型生成，可能还多一次安全复审。量的时候把工具调用次数也记下来，否则会把复审的耗时算到模型头上。
+## Summary
 
-## 带走这两条
-
-1. 只跑一次的数不要信，重复三次以上。
-2. 看到缓存比输入大，先怀疑是累计值。
+1. Repeat measurements at least three times before drawing conclusions.
+2. When cache reads exceed prompt tokens, suspect a cumulative counter.
