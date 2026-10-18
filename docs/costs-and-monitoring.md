@@ -57,5 +57,5 @@ is not a reliable way to reduce latency.
 
 1. Every unrecognized tool call costs an extra one to one and a half seconds.
    Fewer, larger calls are cheaper than many small ones.
-2. The review is built in and cannot be configured away. Effort is better spent
-   on call count.
+2. The review is part of the CLI itself and has no configuration surface, so
+   budget for it rather than trying to remove it.
