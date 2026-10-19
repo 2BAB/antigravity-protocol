@@ -1,11 +1,18 @@
 {
   "name": "agy-mcp",
   "version": "0.1.0",
-  "private": true,
+  "description": "MCP server exposing the local Antigravity CLI (agy) as three tools",
   "type": "module",
-  "description": "MCP server exposing the local Antigravity (agy) CLI as a worker",
+  "license": "MIT",
   "bin": { "agy-mcp": "./src/index.ts" },
   "engines": { "node": ">=24" },
+  "files": ["src", "README.md"],
+  "keywords": ["mcp", "antigravity", "agy", "gemini", "agent", "cli"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/2BAB/antigravity-protocol.git",
+    "directory": "mcp"
+  },
   "scripts": {
     "start": "node src/index.ts",
     "smoke": "node scripts/smoke.mjs"
